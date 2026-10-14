@@ -1,0 +1,13 @@
+# dependencies and build output
+node_modules/
+dist/
+
+# local-only settings
+.claude/settings.local.json
+.vscode/
+.idea/
+
+# OS / logs
+.DS_Store
+Thumbs.db
+*.log

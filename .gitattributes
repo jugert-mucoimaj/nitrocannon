@@ -1,0 +1,4 @@
+# Normalize line endings for text; never touch the 3D models.
+* text=auto
+*.glb binary
+*.gltf binary
