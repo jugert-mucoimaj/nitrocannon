@@ -67,3 +67,7 @@ All four models come from Sketchfab and are used under Creative Commons licenses
 **Changes made:** the files in `normalized/` were rescaled so each model is 10 m on its longest side, recentred on its bounding box, rotated so the nose points along +Z, flattened into a single mesh under one root, and given a convex-hull collision mesh. `game/src/assets/ufo_collectible.glb` is the UFO further simplified to about 6,000 triangles. The files in `originals/` are unmodified.
 
 The Boxcutter jet is licensed for **non-commercial use only** (CC BY-NC 4.0). This is a non-commercial project; it would need to be replaced or relicensed before any commercial use.
+
+## License
+
+The code is released under the [MIT License](LICENSE). The MIT License does **not** cover the 3D models in `originals/`, `normalized/` and `game/src/assets/`: each stays under the Creative Commons license of its author, listed above.
