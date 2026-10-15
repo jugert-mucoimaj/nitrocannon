@@ -3,6 +3,12 @@
 import dusterUrl from '../../../normalized/duster_46_-_sci-fi_hovercraft.glb?url';
 import jetUrl from '../../../normalized/futuristic_sci-fi_jet__plasticity_boxcutter.glb?url';
 import o100Url from '../../../normalized/spaceship_o-100.glb?url';
+import haulerUrl from '../../../normalized/hauler.glb?url';
+import phoenixUrl from '../../../normalized/phoenix.glb?url';
+import outpostAUrl from '../../../normalized/props/outpost_a.glb?url';
+import outpostBUrl from '../../../normalized/props/outpost_b.glb?url';
+import outpostHutUrl from '../../../normalized/props/outpost_hut.glb?url';
+import antennaUrl from '../../../normalized/props/antenna.glb?url';
 import ufoUrl from '../assets/ufo_collectible.glb?url';
 
 export const RACE_LENGTH = 15000;   // metres
@@ -19,6 +25,9 @@ export const AI_LASERS = true;      // rivals shoot back in short bursts (set fa
 export const LASER_SLOWDOWN = 0.86; // speed multiplier for a racer hit by a laser
 
 export const UFO_URL = ufoUrl;
+
+/** Outpost buildings (props: real-world metres, pivot at the bottom centre). */
+export const PROP_URLS = { outpost_a: outpostAUrl, outpost_b: outpostBUrl, outpost_hut: outpostHutUrl, antenna: antennaUrl };
 
 export const cssColor = (n) => '#' + n.toString(16).padStart(6, '0');
 
@@ -44,6 +53,26 @@ export const CREDITS = [
     short: 'Flying Saucer UFO', author: 'Xicor_Devstar', authorUrl: 'https://sketchfab.com/Xicor_Devstar',
     url: 'https://sketchfab.com/3d-models/classic-sci-fi-flying-saucer-ufo-a2c877aab2b64c6db0f69d2e5b5d88d3',
     license: 'CC BY 4.0', licenseUrl: 'https://creativecommons.org/licenses/by/4.0/',
+  },
+  {
+    short: 'Hauler', author: 'VertaScan', authorUrl: 'https://sketchfab.com/VertaScan',
+    url: 'https://sketchfab.com/3d-models/hauler-77fcd0f605ed43da82b214127f44d95d',
+    license: 'CC BY 4.0', licenseUrl: 'https://creativecommons.org/licenses/by/4.0/',
+  },
+  {
+    short: 'Phoenix', author: 'Andrzej Borkowski', authorUrl: 'https://sketchfab.com/abg_3d',
+    url: 'https://sketchfab.com/3d-models/phoenix-sci-fi-spaceship-748271a4f7604d9cb2a6e7bf1e6e437e',
+    license: 'CC BY-NC 4.0', licenseUrl: 'https://creativecommons.org/licenses/by-nc/4.0/',
+  },
+  {
+    short: 'Antenna', author: 'Scarecrow_original', authorUrl: 'https://sketchfab.com/Scarecrow_original',
+    url: 'https://sketchfab.com/3d-models/antenna-77dfdf9a1c2945d7aec3f33e74c65ac4',
+    license: 'CC BY 4.0', licenseUrl: 'https://creativecommons.org/licenses/by/4.0/',
+  },
+  {
+    short: 'Sci-Fi Buildings', author: 'Robin Butler', authorUrl: 'https://sketchfab.com/StarTrekGuy',
+    url: 'https://sketchfab.com/3d-models/stylized-low-poly-sci-fi-buildings-701381fef32444e79ad804315e563049',
+    license: 'CC BY-NC 4.0', licenseUrl: 'https://creativecommons.org/licenses/by-nc/4.0/',
   },
 ];
 
@@ -79,3 +108,30 @@ export const SHIPS = [
     flame: 0xff9a3c,
   },
 ];
+
+/** Explore-only cargo ship: slow and heavy, so a swinging load barely moves it. Can radio for an escort. */
+export const HAULER = {
+  id: 'hauler',
+  name: 'Hauler',
+  tag: 'Cargo dropship',
+  blurb: 'Explore only. Heavy loads barely slow it, and H calls a Phoenix escort.',
+  url: haulerUrl,
+  stats: { speed: 0.85, accel: 0.8, handling: 0.82, nitro: 1.1 },
+  mass: 3,
+  engines: [[0, -0.3, -4.9]],
+  flame: 0xff5a2a,
+  exploreOnly: true,
+};
+
+/** The hauler's NPC wingman. */
+export const PHOENIX = {
+  id: 'phoenix',
+  name: 'Phoenix',
+  url: phoenixUrl,
+  stats: { speed: 1.1, accel: 1.2, handling: 1.2, nitro: 1 },
+  engines: [[-1.3, 0.1, -4.7], [0, 0.1, -4.8], [1.3, 0.1, -4.7]],
+  flame: 0x9fe8ff,
+};
+
+/** Ships offered in each mode's menu. */
+export const EXPLORE_SHIPS = [...SHIPS, HAULER];

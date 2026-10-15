@@ -12,6 +12,10 @@ const BLIP = {
   c: { color: '#7b6f99', r: 6 },   // cleared mothership
   h: { color: '#ff3a3a', r: 7 },   // hostile mothership
   e: { color: '#ff5a4a', r: 2.5 }, // attack drone
+  o: { color: '#5ff2ff', r: 4 },   // outpost (square)
+  g: { color: '#ffc040', r: 6 },   // cargo destination (square)
+  k: { color: '#ffd24a', r: 3.5 }, // crate waiting to be hooked
+  f: { color: '#9fe8ff', r: 3.5 }, // Phoenix escort
 };
 
 /** Top-down radar, ship at the centre pointing up. Blips are pre-rotated by the engine. */
@@ -46,6 +50,8 @@ function Radar({ blips }) {
         g.lineTo(x, y + s);
         g.lineTo(x - s, y);
         g.closePath();
+      } else if (kind === 'o' || kind === 'g') {
+        g.rect(x - s * 0.8, y - s * 0.8, s * 1.6, s * 1.6); // outposts are squares
       } else {
         g.arc(x, y, s, 0, Math.PI * 2);
       }
@@ -87,6 +93,72 @@ function Compass({ heading }) {
   );
 }
 
+/** Credits, the current cargo job (or the job board when you're at an outpost), and the escort's status. */
+function CargoPanel({ cargo, escort }) {
+  const { credits, board, job } = cargo;
+  return (
+    <div className="cargo panel">
+      <div className="label">Credits</div>
+      <div className="credits-n">
+        {credits.toLocaleString()} <small>cr</small>
+      </div>
+      {job && (
+        <div className="job">
+          <div className="label">Cargo job</div>
+          <b>{job.cargo}</b> → {job.to} <span className="km">{job.km} km</span>
+          <div className="crate-hp">
+            <i className={job.hp < 35 ? 'low' : ''}>
+              <span style={{ width: `${job.hp}%` }} />
+            </i>
+            <em>{job.hp}%</em>
+          </div>
+          <p>{job.hint}</p>
+          <small>
+            <kbd>E</kbd> {job.state === 'carrying' ? 'release' : 'hook'} · <kbd>X</kbd> abandon · pays up to {job.reward} cr
+          </small>
+        </div>
+      )}
+      {board && (
+        <div className="board">
+          <div className="label">
+            {board.name} · job board
+          </div>
+          {board.jobs.length ? (
+            board.jobs.map((jb, i) => (
+              <div className="board-row" key={i}>
+                <kbd>{i + 1}</kbd>
+                <span>
+                  <b>{jb.cargo}</b> → {jb.to}
+                </span>
+                <span className="km">{jb.km} km</span>
+                <span className="pay">{jb.reward} cr</span>
+              </div>
+            ))
+          ) : (
+            <p>No routes from here. Try another outpost.</p>
+          )}
+        </div>
+      )}
+      {escort && (
+        <div className={`escort-chip ${escort.state}`}>
+          {escort.state === 'ready' && (
+            <>
+              Phoenix escort <kbd>H</kbd> ready
+            </>
+          )}
+          {escort.state === 'inbound' && <>Phoenix inbound…</>}
+          {escort.state === 'escort' && (
+            <>
+              Phoenix {escort.engaged ? 'engaging' : 'on your wing'} · {escort.left}s{escort.kills ? ` · ${escort.kills} kills` : ''}
+            </>
+          )}
+          {escort.state === 'cooldown' && <>Phoenix refuelling · {escort.left}s</>}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function ExploreHud() {
   const ex = useStore((s) => s.explore);
   const paused = useStore((s) => s.paused);
@@ -118,7 +190,14 @@ export function ExploreHud() {
 
       {t && (
         <div className={`threat panel${t.exposed ? ' exposed' : ''}`}>
-          {t.exposed ? (
+          {t.raid ? (
+            <>
+              <b>⚠ Raiders</b>
+              <span>
+                {t.drones} drone{t.drones === 1 ? '' : 's'} after your cargo
+              </span>
+            </>
+          ) : t.exposed ? (
             <>
               <b>Shield down · destroy the core</b>
               <i className="core-bar">
@@ -144,6 +223,7 @@ export function ExploreHud() {
           <span><i className="diamond" style={{ background: BLIP.l.color }} />Landmark</span>
           <span><i style={{ background: BLIP.m.color }} />Mothership</span>
           <span><i style={{ background: BLIP.h.color }} />Hostile</span>
+          <span><i className="square" style={{ background: BLIP.o.color }} />Outpost</span>
         </div>
         <div className={`scan-chip${ex.scanIn ? '' : ' ready'}`}>
           Scanner <kbd>Q</kbd> {ex.scanIn ? `${ex.scanIn}s` : 'ready'}
@@ -156,6 +236,14 @@ export function ExploreHud() {
           <b />
         </div>
       ))}
+      {ex.cargo.job && (
+        <div id="wp-job" className={`waypoint ${ex.cargo.job.state === 'carrying' ? 'j' : 'k'}`}>
+          <span>{ex.cargo.job.state === 'carrying' ? ex.cargo.job.to : `${ex.cargo.job.cargo} crate`}</span>
+          <b />
+        </div>
+      )}
+
+      <CargoPanel cargo={ex.cargo} escort={ex.escort} />
 
       <div className="crosshair" id="crosshair" />
 
@@ -202,6 +290,7 @@ export function ExploreHud() {
         <span>Mouse aim · A/D turn · W/S thrust / brake</span>
         <span>Space up · Shift+S down · Shift nitro</span>
         <span>Click / F fire · Q scan · Numpad 4/6/8/2 camera</span>
+        <span>E hook · 1-3 take a job · X drop it{ex.escort ? ' · H escort' : ''}</span>
         <span>Wheel zoom · I invert Y ({ex.invert ? 'on' : 'off'}) · P pause · M mute</span>
       </div>
     </section>

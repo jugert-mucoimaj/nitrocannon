@@ -39,6 +39,8 @@ export class Flight {
     this.fov = 60;
     this.dir = new THREE.Vector3(0, 0, 1);
     this.ship = null;
+    this.hauling = false; // set while a crate hangs below: the camera backs off and looks lower to keep it in view
+    this.haul = 0;
   }
 
   /** Take over `ship` where it stands, nose down the canyon (+Z). */
@@ -68,8 +70,9 @@ export class Flight {
    * move:    false = held in place (race countdown) but still animated
    * ceiling: (groundY) => highest allowed y
    * ground:  (x, z, y) => surface height; lets Explore add floating isles you can land on
+   * maxSink: fastest straight-down speed with Shift+S (slower while a crate hangs below you)
    */
-  update(dt, t, keys, { cruise, move = true, ceiling = () => Infinity, ground = groundHeight }) {
+  update(dt, t, keys, { cruise, move = true, ceiling = () => Infinity, ground = groundHeight, maxSink = LIFT_SPEED }) {
     const s = this.ship, st = s.def.stats;
     this.ground = ground;
     const held = (...codes) => codes.some((c) => keys.has(c));
@@ -106,7 +109,7 @@ export class Flight {
       s.nitroActive = boosting;
 
       // Vertical thrusters: Space rises, Shift+S sinks, straight up/down whatever the nose is doing.
-      const liftTarget = ((held('Space') ? 1 : 0) - (descend ? 1 : 0)) * LIFT_SPEED;
+      const liftTarget = (held('Space') ? LIFT_SPEED : 0) - (descend ? maxSink : 0);
       this.lift += (liftTarget - this.lift) * (1 - Math.exp(-dt * 4));
 
       forward(this.dir, this.yaw, this.pitch);
@@ -177,8 +180,9 @@ export class Flight {
     this.camYaw += (this.yaw - this.camYaw) * k;
     this.camPitch += (this.pitch * 0.7 - this.camPitch) * k;
     const sp = clamp(s.fwd / 220, 0, 1);
-    forward(_v, this.camYaw, this.camPitch).multiplyScalar(-(this.zoom + sp * 4 + s.nitroGlow * 3));
-    _v.y += 4 + this.zoom * 0.1;
+    this.haul += ((this.hauling ? 1 : 0) - this.haul) * (1 - Math.exp(-dt * 2));
+    forward(_v, this.camYaw, this.camPitch).multiplyScalar(-(this.zoom + sp * 4 + s.nitroGlow * 3 + this.haul * 16));
+    _v.y += 4 + this.zoom * 0.1 + this.haul * 20;
     cam.position.copy(s.pos).add(applyOrbit(_v, this.orbit));
     const floor = groundHeight(cam.position.x, cam.position.z) + 2.5;
     if (cam.position.y < floor) cam.position.y = floor;
@@ -188,7 +192,7 @@ export class Flight {
       this.shake *= Math.exp(-dt * 5);
     }
     _w.copy(s.pos).addScaledVector(this.dir, 30 * lookAhead(this.orbit));
-    _w.y += 1.5;
+    _w.y += 1.5 - this.haul * 19;
     cam.lookAt(_w);
     this.fov = 60 + sp * 12 + s.nitroGlow * 8;
   }

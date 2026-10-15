@@ -521,3 +521,29 @@ kbd {
   .speed { font-size: 46px; }
   .hint { display: none; }
 }
+
+/* ---------- cargo (explore) ---------- */
+.cards.four { grid-template-columns: repeat(4, minmax(0, 1fr)); width: min(1180px, 100%); }
+@media (max-width: 900px) { .cards.four { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.radar-legend { flex-wrap: wrap; justify-content: center; max-width: 220px; row-gap: 2px; }
+.radar-legend i.square { border-radius: 1px; }
+.cargo { position: absolute; top: 262px; left: 18px; width: 300px; padding: 10px 16px 12px; }
+.credits-n { font-family: var(--display); font-weight: 900; font-size: 24px; color: #ffd24a; margin: 2px 0 6px; }
+.credits-n small { font-size: 13px; color: var(--muted); }
+.cargo .job, .cargo .board { margin-top: 4px; font-size: 15px; font-weight: 600; }
+.cargo .job b, .cargo .board b { color: #ffe08a; }
+.cargo .km { color: var(--muted); margin-left: 6px; font-family: var(--display); font-size: 12px; }
+.cargo p { margin: 4px 0; color: var(--cyan); font-size: 14px; }
+.cargo small { color: var(--muted); font-size: 12px; font-weight: 700; letter-spacing: 0.04em; }
+.crate-hp { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+.crate-hp i { flex: 1; height: 7px; border-radius: 99px; background: rgba(10, 14, 32, 0.6); border: 1px solid var(--line); overflow: hidden; }
+.crate-hp span { display: block; height: 100%; background: linear-gradient(90deg, #d9a23a, #ffe08a); transition: width 0.12s; }
+.crate-hp i.low span { background: #ff4d5e; }
+.crate-hp em { font-style: normal; font-family: var(--display); font-size: 12px; min-width: 34px; text-align: right; }
+.board-row { display: grid; grid-template-columns: auto 1fr auto auto; align-items: baseline; gap: 8px; margin-top: 5px; }
+.board-row .pay { font-family: var(--display); font-size: 13px; color: #ffd24a; }
+.escort-chip { margin-top: 8px; font-size: 12px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
+.escort-chip.ready, .escort-chip.escort, .escort-chip.inbound { color: #9fe8ff; }
+.waypoint.j { --wp: #ffc040; }
+.waypoint.k { --wp: #ffd24a; }
+@media (max-height: 760px) { .cargo { top: auto; bottom: 150px; } }

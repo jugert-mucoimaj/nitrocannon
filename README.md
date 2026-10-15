@@ -4,6 +4,8 @@ A browser flying game built with Three.js, React and React Three Fiber.
 
 - **Race:** a 15 km sprint down an endless procedural canyon against two rivals. The speed cap climbs as the race goes on.
 - **Explore:** an endless open world across four biomes (Red Canyon, Frost Wastes, Volcanic Badlands, Crystal Fields). Discover landmarks (crashed ships, monolith circles, stone arches, floating isles), hunt rare UFOs, clear peaceful motherships guarded by orbiting escorts, and fight hostile red motherships: survive three waves of attack drones, then shoot the exposed core. Your ship has a recharging shield and a hull; lose the hull and you respawn out of range.
+- **Cargo runs (Explore):** outposts with landing pads are scattered across the world (look for the light beacons). Hover over a pad to see its job board, take a job, hook the crate with E and fly it, swinging on its cable, to the gold beacon, then lower it gently onto the pad. Credits pay more for longer, heavier and more fragile loads, less if the crate gets damaged on the way, and are saved between sessions. Long hauls can get ambushed by raider drones, which shoot at you and at the crate.
+- **The Hauler (Explore only):** a slow cargo dropship that barely notices the weight. It can radio for a Phoenix escort (H) that flies on your wing for a while and dogfights any drones that come at you.
 
 Both modes use the same flight controls and lasers.
 
@@ -31,6 +33,10 @@ Then open http://localhost:5173. To build a static site instead, run `npm run bu
 | Shift | Nitro (refilled by UFOs) |
 | Click / F | Fire lasers |
 | Q | Scanner (Explore): marks the nearest UFO, landmark and mothership |
+| 1 / 2 / 3 | Take a job from the board of the outpost you're hovering over (Explore) |
+| E | Hook the crate when you're above it, or let it go (Explore) |
+| X | Abandon the current cargo job (Explore) |
+| H | Call the Phoenix escort (Explore, Hauler only) |
 | Numpad 4 / 6 / 8 / 2 | Swing the camera around the ship (Numpad 5 resets it) |
 | Mouse wheel | Camera zoom |
 | I | Invert mouse Y |
@@ -39,20 +45,20 @@ Then open http://localhost:5173. To build a static site instead, run `npm run bu
 | M | Mute |
 | R | Restart the race |
 
-In the menu, ← → picks a ship, Tab switches mode and Enter starts.
+In the menu, ← → picks a ship, Tab switches mode and Enter starts. The Hauler only shows up in Explore.
 
 ## Project layout
 
 ```
 game/                 Vite + React app
-  src/engine/         game logic in plain JS (terrain, flight, race, explore, lasers, audio)
+  src/engine/         game logic in plain JS (terrain, flight, race, explore, cargo, escort, lasers, audio)
   src/components/     React: 3D scene setup and the HUD/menu overlays
   src/assets/         simplified UFO used for the collectibles
-normalized/           the ship models used by the game (see below)
+normalized/           the ship models used by the game, and outpost props in normalized/props (see below)
 originals/            the untouched Sketchfab downloads
 ```
 
-The tuning numbers (race length, speed ramp, nitro, ship stats, rival lasers) are in `game/src/engine/config.js`.
+The tuning numbers (race length, speed ramp, nitro, ship stats, rival lasers) are in `game/src/engine/config.js`; cargo (cable length, crate damage, raid odds) is tuned at the top of `game/src/engine/cargo.js`, and the escort in `game/src/engine/escort.js`.
 
 ## 3D model credits
 

@@ -1,4 +1,4 @@
-import { SHIPS, CREDITS, cssColor } from '../engine/config.js';
+import { SHIPS, EXPLORE_SHIPS, CREDITS, cssColor } from '../engine/config.js';
 import { store } from '../engine/store.js';
 import { useStore } from '../useStore.js';
 import { Title, UfoIcon, ordinal, press } from './ui.jsx';
@@ -34,7 +34,7 @@ const statPct = (v) => Math.round(Math.min(1, Math.max(0.05, (v - 0.8) / 0.5)) *
 
 const MODES = [
   { id: 'race', name: 'Race', blurb: '15 km canyon sprint against two armed rivals' },
-  { id: 'explore', name: 'Explore', blurb: 'Open world · four biomes, landmarks, rare UFOs' },
+  { id: 'explore', name: 'Explore', blurb: 'Open world · biomes, landmarks, cargo runs, rare UFOs' },
 ];
 
 // Both modes fly the same way.
@@ -47,6 +47,7 @@ const CONTROLS = [
   [['Shift'], 'nitro'],
   [['Click', 'F'], 'lasers'],
   [['Q'], 'scan (explore)'],
+  [['E'], 'cargo hook (explore)'],
   [['Num 4 6 8 2'], 'camera'],
 ];
 
@@ -73,6 +74,7 @@ export function Menu() {
   const selected = useStore((s) => s.selected);
   const mode = useStore((s) => s.mode);
   const engine = useStore((s) => s.engine);
+  const ships = mode === 'explore' ? EXPLORE_SHIPS : SHIPS;
   return (
     <section className="overlay menu">
       <header className="menu-head">
@@ -80,7 +82,7 @@ export function Menu() {
         <p className="subtitle">
           {mode === 'race'
             ? '15 km canyon sprint · the speed cap keeps climbing · blast rivals, spires and UFOs'
-            : 'Endless open world · four biomes · discover landmarks, hunt rare UFOs and motherships'}
+            : 'Endless open world · four biomes · landmarks, motherships, rare UFOs and cargo runs between outposts'}
         </p>
       </header>
       <div className="menu-foot">
@@ -95,8 +97,8 @@ export function Menu() {
             <kbd>Tab</kbd> switch
           </span>
         </div>
-        <div className="cards">
-          {SHIPS.map((s, i) => (
+        <div className={`cards${ships.length > 3 ? ' four' : ''}`}>
+          {ships.map((s, i) => (
             <button
               key={s.id}
               className={`card${i === selected ? ' selected' : ''}`}

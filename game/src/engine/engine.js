@@ -3,7 +3,7 @@
 // The player always flies with the same free-flight controls (flight.js); AI racers use racers.js.
 import * as THREE from 'three';
 import {
-  SHIPS, RACE_LENGTH, START_SPEED, MAX_BASE_SPEED, SPEED_RAMP, COUNTDOWN, NITRO_PER_UFO, RING_BURST, AI_LASERS,
+  SHIPS, HAULER, PHOENIX, RACE_LENGTH, START_SPEED, MAX_BASE_SPEED, SPEED_RAMP, COUNTDOWN, NITRO_PER_UFO, RING_BURST, AI_LASERS,
   LASER_SLOWDOWN, cssColor,
 } from './config.js';
 import { Terrain, courseX, groundHeight, clamp, smoothstep } from './world.js';
@@ -111,11 +111,16 @@ export class Engine {
       scene.add(r.object);
       return r;
     });
+    // Explore can also fly the hauler (it never races).
+    this.hauler = new Racer(HAULER, this.assets.hauler.scene);
+    scene.add(this.hauler.object);
+    this.ships = [...this.racers, this.hauler];
     this.flight = new Flight({ camera, particles: this.particles, orbit: this.orbit });
     this.explorer = new Explorer({
       scene, flight: this.flight, swarm: this.swarm, particles: this.particles, lasers: this.lasers, sfx: this.sfx,
       toast: (text, kind) => this.toast(text, kind), ufoTemplate: this.assets.ufo.scene,
       shipTemplates: this.assets.ships.map((g) => g.scene), shipNames: SHIPS.map((s) => s.name),
+      props: this.assets.props, escort: { def: PHOENIX, model: this.assets.phoenix.scene },
     });
     this.terrain.update(courseX(0), 0, Infinity);
     addEventListener('keydown', this.onKeyDown);
@@ -155,7 +160,7 @@ export class Engine {
     this.particles.dispose();
     this.streaks.dispose();
     this.lasers.dispose();
-    for (const r of this.racers) this.scene.remove(r.object);
+    for (const r of this.ships) this.scene.remove(r.object);
     this.scene.remove(this.sun.target);
     this.sfx.stop();
     store.set({ engine: null });
@@ -163,8 +168,14 @@ export class Engine {
 
   // ---------- actions (called by keyboard and React UI) ----------
 
+  /** Ships on offer in the menu: the race needs a racer, Explore also has the hauler. */
+  menuShips() {
+    return this.mode === 'explore' ? this.ships : this.racers;
+  }
+
   selectShip(i) {
-    this.selected = (i + SHIPS.length) % SHIPS.length;
+    const n = this.menuShips().length;
+    this.selected = (i + n) % n;
     store.set({ selected: this.selected });
     if (this.state === 'menu') this.layoutGrid();
   }
@@ -172,6 +183,7 @@ export class Engine {
   setMode(mode) {
     this.mode = mode;
     store.set({ mode });
+    if (this.selected >= this.menuShips().length) this.selectShip(0);
   }
 
   /** Start whichever mode is selected in the menu. */
@@ -201,7 +213,7 @@ export class Engine {
     this.terrain.shape = explore ? 'around' : 'race';
     this.course.setVisible(!explore);
     if (!explore) this.explorer.clear();
-    for (const r of this.racers) r.object.visible = !explore || r === this.player;
+    if (explore) for (const r of this.ships) r.object.visible = r === this.player; // (the race grid is set by layoutGrid)
     this.biome = null; // re-detect quietly; no "Entering …" banner on a mode switch
   }
 
@@ -243,7 +255,7 @@ export class Engine {
   startExplore() {
     if (!this.attached) return;
     this.sfx.start();
-    this.player = this.racers[this.selected];
+    this.player = this.ships[this.selected];
     this.course.reset();
     this.useWorld('explore');
     this.explorer.start(this.player);
@@ -261,6 +273,7 @@ export class Engine {
     if (!this.attached) return;
     this.sfx.start();
     if (this.state === 'explore') this.enterMenu();
+    if (this.selected >= this.racers.length) this.selectShip(0);
     this.player = this.racers[this.selected];
     this.layoutGrid();
     this.racers.forEach((r) => {
@@ -356,7 +369,7 @@ export class Engine {
 
   toggleHulls() {
     this.showHulls = !this.showHulls;
-    for (const r of this.racers) r.showHull(this.showHulls);
+    for (const r of [...this.ships, this.explorer.escort.ship]) r.showHull(this.showHulls);
     this.toast(`Collision hulls ${this.showHulls ? 'on' : 'off'}`);
   }
 
@@ -382,8 +395,8 @@ export class Engine {
   }
 
   updateMenu(dt, t) {
-    const r = this.racers[this.selected];
-    for (const x of this.racers) x.pose(dt, t);
+    const r = this.ships[this.selected];
+    for (const x of this.ships) x.pose(dt, t);
     const a = t * 0.22;
     this.camera.position.set(r.pos.x + Math.sin(a) * 23, r.pos.y + 5 + Math.sin(t * 0.4) * 1.2, r.pos.z + Math.cos(a) * 23);
     this.camera.lookAt(r.pos.x, r.pos.y - 2.5, r.pos.z);
@@ -570,13 +583,13 @@ export class Engine {
     el.classList.toggle('locked', !!this.assistTarget());
   }
 
-  /** Scanner markers: placed over their target, or pinned to the screen edge pointing at it. */
+  /** Scanner and cargo markers: placed over their target, or pinned to the screen edge pointing at it. */
   updateWaypoints() {
     const wps = this.explorer.waypoints;
-    for (let i = 0; i < 3; i++) {
-      const el = document.getElementById(`wp-${i}`);
+    for (let i = 0; i < 4; i++) {
+      const el = document.getElementById(i < 3 ? `wp-${i}` : 'wp-job');
       if (!el) continue;
-      const w = wps[i];
+      const w = i < 3 ? wps[i] : this.explorer.cargo.marker();
       if (!w) {
         el.style.opacity = '0';
         continue;
@@ -842,8 +855,11 @@ export class Engine {
   }
 
   layoutGrid() {
-    const others = this.racers.filter((_, i) => i !== this.selected);
-    [others[0], this.racers[this.selected], others[1]].forEach((r, k) => {
+    const me = this.ships[this.selected];
+    const others = this.racers.filter((r) => r !== me);
+    const grid = [others[0], me, others[1]];
+    for (const r of this.ships) r.object.visible = grid.includes(r);
+    grid.forEach((r, k) => {
       const x = courseX(0) + (k - 1) * 22;
       let g = -Infinity;
       for (const dx of [-6, 0, 6]) for (const dz of [-6, 0, 6]) g = Math.max(g, groundHeight(x + dx, dz));
@@ -914,6 +930,8 @@ export class Engine {
         radar: ex.radar(),
         scraping: s.scraping,
         invert: fl.invert,
+        cargo: ex.cargo.hud(s),
+        escort: s.def.id === 'hauler' ? ex.escort.hud(this.t ?? 0) : null,
       },
     });
   }
@@ -947,6 +965,20 @@ export class Engine {
 
   // ---------- input ----------
 
+  /** Explore-only keys: scanner, cargo (E hook, 1-3 take a job, X drop it) and the hauler's escort (H). */
+  exploreKey(c) {
+    const ex = this.explorer, s = this.player;
+    if (c === 'KeyQ') this.scan();
+    else if (ex.disabled) return false;
+    else if (c === 'KeyE') ex.cargo.hook(s);
+    else if (c === 'Digit1' || c === 'Digit2' || c === 'Digit3') ex.cargo.accept(Number(c.slice(5)) - 1, s);
+    else if (c === 'KeyX') ex.cargo.abandon();
+    else if (c === 'KeyH') ex.callEscort(this.t ?? 0);
+    else return false;
+    this.publishExplore();
+    return true;
+  }
+
   onKeyDown(e) {
     if (GAME_KEYS.includes(e.code) && (e.code !== 'Tab' || this.state === 'menu')) e.preventDefault();
     this.keys.add(e.code);
@@ -971,7 +1003,7 @@ export class Engine {
     if (c === 'KeyP') this.togglePause();
     else if (c === 'Numpad5') this.orbit.returning = true;
     else if (c === 'KeyI') this.toggleInvert();
-    else if (c === 'KeyQ' && this.state === 'explore' && !this.paused) this.scan();
+    else if (this.state === 'explore' && !this.paused && this.exploreKey(c)) return;
     else if (c === 'Escape') this.paused ? this.enterMenu() : this.togglePause();
     else if (this.paused && c === 'Enter') this.resume();
     else if (c === 'KeyR' && this.state !== 'explore') this.startRace();

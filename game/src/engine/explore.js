@@ -3,6 +3,7 @@
 // by collectible escorts, hostile (red) ones launch waves of attack drones (drones.js) that you must
 // clear before you can destroy them. Everything comes from deterministic per-cell / per-region specs,
 // so the world is the same every visit and the scanner can find things that haven't been built yet.
+// Cargo runs (cargo.js) and the hauler's Phoenix escort (escort.js) live here too.
 import * as THREE from 'three';
 import { courseX, groundHeight, maxGround, rng, hash2 } from './world.js';
 import { biomeWeights, dominant, BIOMES } from './biomes.js';
@@ -11,6 +12,8 @@ import { Drones, hostileMaterials, DRONE_RADIUS } from './drones.js';
 import { sweepCollect } from './ufos.js';
 import { segmentSphere, BOLT_SPEED } from './lasers.js';
 import { glowTexture } from './effects.js';
+import { Cargo } from './cargo.js';
+import { Escort } from './escort.js';
 import { NITRO_PER_UFO, RING_BURST } from './config.js';
 
 const CELL = 400, CELL_RADIUS = 4;   // small stuff: lone UFOs and boost rings
@@ -39,6 +42,9 @@ const SHIELD_REGEN = 25;        // per second, after…
 const REGEN_DELAY = 3;          // …this long without being hit
 const RESPAWN_DELAY = 2.5;
 const ENEMY_BOLT = 0xff4d4d;
+const RAIDERS = 4;              // drones in a cargo ambush
+const CRATE_AIM = 0.3;          // share of drone shots aimed at a hooked crate instead of you
+const CARGO_SINK = 9;           // m/s straight down with Shift+S while hauling, so the crate keeps up
 
 const _v = new THREE.Vector3();
 const _w = new THREE.Vector3();
@@ -61,11 +67,14 @@ function forRegions(p, size, radius, fn) {
 }
 
 export class Explorer {
-  constructor({ scene, flight, swarm, particles, lasers, sfx, toast, ufoTemplate, shipTemplates, shipNames }) {
+  constructor({ scene, flight, swarm, particles, lasers, sfx, toast, ufoTemplate, shipTemplates, shipNames, props, escort }) {
     Object.assign(this, { scene, flight, swarm, particles, lasers, sfx, toast, ufoTemplate });
     this.kit = new LandmarkKit({ shipTemplates, shipNames });
     this.hostile = hostileMaterials();
     this.drones = new Drones(scene, ufoTemplate, this.hostile);
+    this.cargo = new Cargo({ scene, props, particles, sfx, toast, raid: (at) => this.raid(at) });
+    this.escort = new Escort({ scene, def: escort.def, model: escort.model, lasers, particles, sfx, toast });
+    this.raiders = null; // the drone group of the current cargo ambush
     this.playerVel = new THREE.Vector3();
     this.cells = new Map();
     this.landmarks = new Map();
@@ -93,6 +102,8 @@ export class Explorer {
   dispose() {
     this.clear();
     this.drones.dispose();
+    this.cargo.dispose();
+    this.escort.dispose();
   }
 
   start(ship) {
@@ -115,6 +126,7 @@ export class Explorer {
     this.hull = 100;
     this.hurtAt = -9;
     this.disabledUntil = 0;
+    this.cargo.start();
     const x = courseX(0); // the canyon start, where the race begins
     ship.reset(x, maxGround(x, 0, 10) + ship.halfHeight + 25, 0);
     this.flight.takeControl(ship, 60);
@@ -126,6 +138,10 @@ export class Explorer {
     for (const id of [...this.mothers.keys()]) this.removeMother(id);
     this.drones.clear();
     this.drones.render(0);
+    this.cargo.clear();
+    this.escort.reset();
+    this.raiders = null;
+    this.flight.hauling = false;
   }
 
   get disabled() {
@@ -136,30 +152,39 @@ export class Explorer {
     this.time += dt;
     this.t = t;
     if (this.disabled && t >= this.disabledUntil) this.respawn();
+    const s = this.ship;
     if (!this.disabled) {
-      this.flight.update(dt, t, keys, { cruise: 150 * this.ship.def.stats.speed, ceiling: () => MAX_ALT, ground: this.ground });
-      this.playerVel.subVectors(this.ship.pos, this.ship.prev).divideScalar(Math.max(dt, 1e-3));
+      const cruise = 150 * s.def.stats.speed * this.cargo.loadFactor(s);
+      const maxSink = this.cargo.job?.hooked ? CARGO_SINK : undefined;
+      this.flight.hauling = !!this.cargo.job?.hooked;
+      this.flight.update(dt, t, keys, { cruise, ceiling: () => MAX_ALT, ground: this.ground, maxSink });
+    }
+    this.cargo.update(dt, t, s, this.ground); // after flight: the cable tugs the ship
+    if (!this.disabled) {
+      this.playerVel.subVectors(s.pos, s.prev).divideScalar(Math.max(dt, 1e-3));
       if (t - this.hurtAt > REGEN_DELAY) this.shield = Math.min(100, this.shield + SHIELD_REGEN * dt);
     }
     this.populate(dt);
     this.animateWorld(t, dt);
     this.updateHostiles(dt, t);
+    this.updateRaid();
     this.drones.update(dt, t, {
-      player: this.ship, playerVel: this.playerVel, ground: this.ground, fire: (d) => this.droneFire(d),
+      player: s, playerVel: this.playerVel, ground: this.ground, fire: (d) => this.droneFire(d),
     });
+    this.escort.update(dt, t, { player: s, playerVel: this.playerVel, yaw: this.flight.yaw, drones: this.drones, ground: this.ground });
     if (!this.disabled) this.interact(t);
     this.swarm.draw(t, this.ufoLists());
     this.drones.render(t);
   }
 
-  /** Terrain, or the top of a floating isle if you're above it. */
+  /** Terrain, or the top of a floating isle or landing pad if you're above it. */
   surfaceAt(x, z, y) {
     let g = groundHeight(x, z);
-    for (const lm of this.landmarks.values()) {
-      for (const s of lm.surfaces) {
-        if (y > s.top - 8 && (x - s.x) ** 2 + (z - s.z) ** 2 < s.r * s.r) g = Math.max(g, s.top);
-      }
-    }
+    const on = (s) => {
+      if (y > s.top - 8 && (x - s.x) ** 2 + (z - s.z) ** 2 < s.r * s.r) g = Math.max(g, s.top);
+    };
+    for (const lm of this.landmarks.values()) for (const s of lm.surfaces) on(s);
+    for (const o of this.cargo.outposts.values()) for (const s of o.surfaces) on(s);
     return g;
   }
 
@@ -415,6 +440,7 @@ export class Explorer {
       }
       for (const ob of lm.obstacles) this.collideObstacle(ob, t);
     }
+    for (const o of this.cargo.outposts.values()) for (const ob of o.obstacles) this.collideObstacle(ob, t);
 
     for (const m of this.mothers.values()) {
       if (m.hostile) continue; // hostile ones are handled by updateHostiles()
@@ -455,10 +481,22 @@ export class Explorer {
     }
   }
 
-  /** A laser bolt moved from a to c this frame. `mine` = fired by the player, otherwise by a drone. */
+  /** A laser bolt moved from a to c this frame. `mine` = fired by the player, otherwise by a drone or the escort. */
   laserHit(b, a, c, mine) {
+    if (b.owner === this.escort.ship) {
+      // Friendly fire is off: the escort's bolts only hit drones.
+      for (const d of this.drones.list) {
+        if (segmentSphere(a, c, d.pos, DRONE_RADIUS)) {
+          this.hitDrone(d, c, true);
+          return true;
+        }
+      }
+      return this.hitsLandmark(c);
+    }
     if (!mine) {
       const s = this.ship;
+      const crate = this.cargo.crateSphere();
+      if (crate && segmentSphere(a, c, crate.pos, crate.r)) return this.cargo.hitCrate(c);
       if (!this.disabled && segmentSphere(a, c, s.pos, Math.max(s.halfWidth * 0.7, 3.5))) {
         this.damage(DRONE_DAMAGE, c);
         return true;
@@ -495,12 +533,12 @@ export class Explorer {
   }
 
   hitsLandmark(c) {
-    for (const lm of this.landmarks.values()) {
-      for (const ob of lm.obstacles) {
-        if (c.y > ob.bottom && c.y < ob.top && Math.hypot(c.x - ob.x, c.z - ob.z) < ob.r) {
-          this.particles.emit(c, 10, { color: 0xffc48a, speed: 12, life: 0.5 });
-          return true;
-        }
+    const hit = (ob) => c.y > ob.bottom && c.y < ob.top && Math.hypot(c.x - ob.x, c.z - ob.z) < ob.r;
+    for (const group of [this.landmarks, this.cargo.outposts]) {
+      for (const lm of group.values()) {
+        if (!lm.obstacles.some(hit)) continue;
+        this.particles.emit(c, 10, { color: 0xffc48a, speed: 12, life: 0.5 });
+        return true;
       }
     }
     return false;
@@ -566,9 +604,11 @@ export class Explorer {
   droneFire(d) {
     const s = this.ship;
     if (this.disabled) return;
-    // Lead the player a little, with some spread so it's dodgeable.
-    const dist = d.pos.distanceTo(s.pos);
-    _w.copy(s.pos).addScaledVector(this.playerVel, dist / BOLT_SPEED);
+    // Lead the player (or now and then the crate on its hook) a little, with some spread so it's dodgeable.
+    const crate = this.cargo.job?.hooked && Math.random() < CRATE_AIM ? this.cargo.job.crate : null;
+    const target = crate ? crate.pos : s.pos;
+    const dist = d.pos.distanceTo(target);
+    _w.copy(target).addScaledVector(crate ? crate.vel : this.playerVel, dist / BOLT_SPEED);
     _w.x += (Math.random() - 0.5) * 5;
     _w.y += (Math.random() - 0.5) * 4;
     _w.z += (Math.random() - 0.5) * 5;
@@ -579,13 +619,14 @@ export class Explorer {
     if (dist < 400) this.sfx.laser(false);
   }
 
-  hitDrone(d, at) {
+  hitDrone(d, at, byEscort = false) {
     d.hp--;
     this.particles.emit(at, 12, { color: 0xff7a4a, speed: 16, life: 0.4, gravity: 0 });
     if (d.hp > 0) return;
     this.drones.remove(d);
     this.kills++;
-    this.ship.nitro = Math.min(1, this.ship.nitro + 0.05);
+    if (byEscort) this.escort.kills++;
+    else this.ship.nitro = Math.min(1, this.ship.nitro + 0.05);
     this.particles.emit(d.pos, 40, { color: 0xff6a2a, speed: 26, life: 0.8, gravity: 0.3 });
     this.particles.emit(d.pos, 14, { color: 0xffffff, speed: 14, life: 0.4, gravity: 0 });
     this.sfx.bump();
@@ -631,6 +672,8 @@ export class Explorer {
     this.flight.shake = 1.8;
     this.sfx.crash();
     this.toast('Ship disabled! Respawning…', 'bad');
+    this.cargo.release(); // the crate falls; it can be picked up again
+    this.raiders = null;
     for (const m of this.mothers.values()) if (m.hostile && m.state !== 'destroyed' && m.state !== 'idle') this.resetMother(m);
     this.drones.clear();
   }
@@ -662,7 +705,36 @@ export class Explorer {
     this.toast('Back in action', 'scan');
   }
 
-  /** The fight you're in (nearest engaged hostile mothership), for the HUD. */
+  // ---------- cargo ambushes and the escort ----------
+
+  /** Raiders jump a cargo run: a pack of drones coming in from ahead. */
+  raid() {
+    const s = this.ship, yaw = this.flight.yaw;
+    this.raiders = { raid: true };
+    for (let k = 0; k < RAIDERS; k++) {
+      const a = yaw + (k - (RAIDERS - 1) / 2) * 0.35;
+      const x = s.pos.x + Math.sin(a) * 520, z = s.pos.z + Math.cos(a) * 520;
+      this.drones.spawn(_v.set(x, Math.max(s.pos.y, this.surfaceAt(x, z, s.pos.y) + 40) + 30, z), this.raiders);
+    }
+    this.sfx.alarm();
+    this.toast('Raiders! Protect the cargo', 'bad');
+    if (s.def.id === 'hauler' && !this.escort.active) this.toast('Press H to radio your Phoenix escort', 'scan');
+  }
+
+  updateRaid() {
+    if (!this.raiders || this.drones.list.some((d) => d.mother === this.raiders)) return;
+    this.raiders = null;
+    this.sfx.finish();
+    this.toast('Raiders driven off!', 'boost');
+  }
+
+  /** H: only the hauler carries the radio for a Phoenix escort. */
+  callEscort(t) {
+    if (this.ship.def.id !== 'hauler') return this.toast('Only the Hauler can call an escort');
+    this.escort.call(t, this.ship, this.flight.yaw);
+  }
+
+  /** The fight you're in (nearest engaged hostile mothership, else a cargo ambush), for the HUD. */
   threat() {
     const p = this.ship.pos;
     let best = null, bestD = Infinity;
@@ -671,6 +743,7 @@ export class Explorer {
       const d = Math.hypot(m.x - p.x, m.z - p.z);
       if (d < bestD) [best, bestD] = [m, d];
     }
+    if (!best && this.raiders) return { raid: true, drones: this.drones.list.filter((d) => d.mother === this.raiders).length };
     if (!best) return null;
     return {
       exposed: best.state === 'exposed',
@@ -766,6 +839,8 @@ export class Explorer {
     for (const lm of this.landmarks.values()) plot(lm.x, lm.z, this.discovered.has(lm.id) ? 'd' : 'l', 2500);
     for (const m of this.mothers.values()) plot(m.x, m.z, m.hostile ? 'h' : this.mothersCleared.has(m.id) ? 'c' : 'm', MS_SPAWN);
     for (const d of this.drones.list) plot(d.pos.x, d.pos.z, 'e');
+    this.cargo.blips(plot);
+    if (this.escort.state !== 'idle') plot(this.escort.ship.pos.x, this.escort.ship.pos.z, 'f');
     return out;
   }
 }
