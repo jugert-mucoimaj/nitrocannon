@@ -14,6 +14,7 @@ import { UfoSwarm } from './ufos.js';
 import { Flight, applyOrbit, lookAhead } from './flight.js';
 import { Explorer } from './explore.js';
 import { Lasers, BOLT_SPEED, segmentSphere } from './lasers.js';
+import { ATMOS, BIOMES, biomeWeights } from './biomes.js';
 import { Sfx } from './audio.js';
 import { store } from './store.js';
 
@@ -93,9 +94,11 @@ export class Engine {
     };
   }
 
-  attach({ scene, camera, sun, dom }) {
+  attach({ scene, camera, sun, hemi, dom }) {
     if (this.attached) return;
-    Object.assign(this, { scene, camera, sun, dom });
+    Object.assign(this, { scene, camera, sun, hemi, dom });
+    this.biomeW = new Float32Array(4);
+    this.biome = null;
     scene.add(sun.target);
     this.terrain = new Terrain(scene);
     this.swarm = new UfoSwarm(scene, this.assets.ufo.scene);
@@ -110,8 +113,9 @@ export class Engine {
     });
     this.flight = new Flight({ camera, particles: this.particles, orbit: this.orbit });
     this.explorer = new Explorer({
-      scene, flight: this.flight, swarm: this.swarm, particles: this.particles, sfx: this.sfx,
+      scene, flight: this.flight, swarm: this.swarm, particles: this.particles, lasers: this.lasers, sfx: this.sfx,
       toast: (text, kind) => this.toast(text, kind), ufoTemplate: this.assets.ufo.scene,
+      shipTemplates: this.assets.ships.map((g) => g.scene), shipNames: SHIPS.map((s) => s.name),
     });
     this.terrain.update(courseX(0), 0, Infinity);
     addEventListener('keydown', this.onKeyDown);
@@ -145,7 +149,7 @@ export class Engine {
     this.dom.removeEventListener('click', this.onCanvasClick);
     if (this.locked()) document.exitPointerLock();
     this.terrain.clear();
-    this.explorer.clear();
+    this.explorer.dispose();
     this.course.dispose();
     this.swarm.dispose();
     this.particles.dispose();
@@ -198,7 +202,42 @@ export class Engine {
     this.course.setVisible(!explore);
     if (!explore) this.explorer.clear();
     for (const r of this.racers) r.object.visible = !explore || r === this.player;
-    [this.scene.fog.near, this.scene.fog.far] = FOG[kind];
+    this.biome = null; // re-detect quietly; no "Entering …" banner on a mode switch
+  }
+
+  /** Blend sky, fog, sun and ambient light from the biomes around `pos`, and announce biome changes. */
+  updateAtmosphere(pos) {
+    const w = biomeWeights(pos.x, pos.z, this.biomeW);
+    const mix = (out, key) => {
+      out.setRGB(0, 0, 0);
+      for (let i = 0; i < 4; i++) {
+        out.r += BIOMES[i][key].r * w[i];
+        out.g += BIOMES[i][key].g * w[i];
+        out.b += BIOMES[i][key].b * w[i];
+      }
+    };
+    mix(ATMOS.top, 'top');
+    mix(ATMOS.horizon, 'horizon');
+    mix(ATMOS.below, 'below');
+    mix(this.sun.color, 'sunColor');
+    mix(this.hemi.color, 'hemiSky');
+    mix(this.hemi.groundColor, 'hemiGround');
+    let density = 0, sunI = 0, best = 0;
+    for (let i = 0; i < 4; i++) {
+      density += BIOMES[i].fog * w[i];
+      sunI += BIOMES[i].sunIntensity * w[i];
+      if (w[i] > w[best]) best = i;
+    }
+    this.sun.intensity = sunI;
+    const [near, far] = FOG[this.state === 'explore' ? 'explore' : 'race'];
+    this.scene.fog.color.copy(ATMOS.horizon);
+    this.scene.fog.near = near * density;
+    this.scene.fog.far = far * density;
+    if (best !== this.biome && w[best] > 0.62) {
+      const announce = this.biome !== null && (this.state === 'explore' || this.state === 'race');
+      this.biome = best;
+      if (announce) this.toast(`Entering ${BIOMES[best].name}`, 'biome');
+    }
   }
 
   startExplore() {
@@ -278,6 +317,7 @@ export class Engine {
   }
 
   flightActive() {
+    if (this.state === 'explore' && this.explorer.disabled) return false; // waiting to respawn
     return this.flying() && !!this.player && !this.player.finished;
   }
 
@@ -304,6 +344,16 @@ export class Engine {
     this.toast(`Mouse Y ${this.flight.invert ? 'inverted' : 'normal'}`);
   }
 
+  scan() {
+    const found = this.explorer.scan(this.t ?? 0);
+    if (found === null) this.toast(`Scanner recharging · ${Math.ceil(this.explorer.scanCooldown(this.t ?? 0))}s`);
+    else {
+      this.sfx.countdown(false);
+      this.toast(found ? `Scanner: ${found} contact${found > 1 ? 's' : ''} marked` : 'Scanner: nothing in range', 'scan');
+    }
+    this.publishExplore();
+  }
+
   toggleHulls() {
     this.showHulls = !this.showHulls;
     for (const r of this.racers) r.showHull(this.showHulls);
@@ -325,6 +375,7 @@ export class Engine {
   frame(dt, t) {
     if (!this.attached || this.paused) return;
     this.dt = dt;
+    this.t = t;
     if (this.state === 'menu') this.updateMenu(dt, t);
     else if (this.state === 'explore') this.updateExplore(dt, t);
     else this.updateRace(dt, t);
@@ -349,6 +400,7 @@ export class Engine {
     this.setFov(this.flight.fov, 1 - Math.exp(-dt * 4));
     this.updateWeapons(dt);
     this.updateReticle();
+    this.updateWaypoints();
     const f = s.fwd;
     this.streaks.update(this.camera.position, f, smoothstep(120, 260, f) * 0.4 + s.nitroGlow * 0.35, this.flight.dir);
     this.sfx.engine(clamp(f / 260, 0, 1), s.nitroActive, true);
@@ -424,6 +476,7 @@ export class Engine {
     this.particles.update(dt);
     this.sun.position.copy(focus).addScaledVector(SUN_DIR, 250);
     this.sun.target.position.copy(focus);
+    this.updateAtmosphere(focus);
   }
 
   updateOrbit(dt) {
@@ -491,6 +544,9 @@ export class Engine {
     };
     const lists = this.state === 'explore' ? this.explorer.ufoLists() : this.course.ufoLists();
     for (const list of lists) for (const u of list) if (!u.taken) consider(u.x, u.y, u.z, u.vx, u.vy, u.vz);
+    if (this.state === 'explore') {
+      for (const d of this.explorer.drones.list) consider(d.pos.x, d.pos.y, d.pos.z, d.vel.x, d.vel.y, d.vel.z);
+    }
     if (this.state !== 'explore') {
       const inv = 1 / Math.max(this.dt || 1 / 60, 1e-3);
       for (const r of this.racers) {
@@ -512,6 +568,40 @@ export class Engine {
     el.style.top = `${((1 - _aimDir.y) / 2) * 100}%`;
     el.style.opacity = visible ? '' : '0';
     el.classList.toggle('locked', !!this.assistTarget());
+  }
+
+  /** Scanner markers: placed over their target, or pinned to the screen edge pointing at it. */
+  updateWaypoints() {
+    const wps = this.explorer.waypoints;
+    for (let i = 0; i < 3; i++) {
+      const el = document.getElementById(`wp-${i}`);
+      if (!el) continue;
+      const w = wps[i];
+      if (!w) {
+        el.style.opacity = '0';
+        continue;
+      }
+      _aimDir.copy(w.pos).project(this.camera);
+      let { x, y } = _aimDir;
+      const behind = _aimDir.z > 1;
+      if (behind) {
+        x = -x;
+        y = -y;
+        if (Math.abs(x) + Math.abs(y) < 0.05) y = -1; // dead astern: park it at the bottom
+      }
+      const m = Math.max(Math.abs(x), Math.abs(y));
+      const edge = behind || m > 0.9;
+      if (edge) {
+        x *= 0.9 / m;
+        y *= 0.9 / m;
+      }
+      el.style.left = `${((x + 1) / 2) * 100}%`;
+      el.style.top = `${((1 - y) / 2) * 100}%`;
+      el.style.opacity = '';
+      el.classList.toggle('edge', edge);
+      const d = this.player.pos.distanceTo(w.pos);
+      el.lastElementChild.textContent = d >= 1000 ? `${(d / 1000).toFixed(1)} km` : `${Math.round(d)} m`;
+    }
   }
 
   firePlayer() {
@@ -562,7 +652,7 @@ export class Engine {
       return true;
     }
     const mine = b.owner === this.player;
-    if (this.state === 'explore') return mine && this.explorer.laserHit(a, c);
+    if (this.state === 'explore') return this.explorer.laserHit(b, a, c, mine);
 
     if (mine) {
       const got = this.course.collect(a, c, 5);
@@ -809,6 +899,17 @@ export class Engine {
         ufos: ex.found,
         mothers: ex.mothersFound.size,
         cleared: ex.mothersCleared.size,
+        landmarks: ex.discovered.size,
+        destroyed: ex.mothersDestroyed.size,
+        kills: ex.kills,
+        shield: ex.shield / 100,
+        hull: ex.hull / 100,
+        hurt: (this.t ?? 0) - ex.hurtAt < 0.25,
+        disabled: ex.disabled,
+        threat: ex.threat(),
+        biome: BIOMES[this.biome ?? 0].name,
+        scanIn: Math.ceil(ex.scanCooldown(this.t ?? 0)),
+        waypoints: ex.waypoints.map((w) => ({ kind: w.kind, label: w.label })),
         time: fmtTime(ex.time),
         radar: ex.radar(),
         scraping: s.scraping,
@@ -870,6 +971,7 @@ export class Engine {
     if (c === 'KeyP') this.togglePause();
     else if (c === 'Numpad5') this.orbit.returning = true;
     else if (c === 'KeyI') this.toggleInvert();
+    else if (c === 'KeyQ' && this.state === 'explore' && !this.paused) this.scan();
     else if (c === 'Escape') this.paused ? this.enterMenu() : this.togglePause();
     else if (this.paused && c === 'Enter') this.resume();
     else if (c === 'KeyR' && this.state !== 'explore') this.startRace();

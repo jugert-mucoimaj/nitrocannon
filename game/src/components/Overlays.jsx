@@ -34,7 +34,7 @@ const statPct = (v) => Math.round(Math.min(1, Math.max(0.05, (v - 0.8) / 0.5)) *
 
 const MODES = [
   { id: 'race', name: 'Race', blurb: '15 km canyon sprint against two armed rivals' },
-  { id: 'explore', name: 'Explore', blurb: 'Open world · hunt UFOs and motherships' },
+  { id: 'explore', name: 'Explore', blurb: 'Open world · four biomes, landmarks, rare UFOs' },
 ];
 
 // Both modes fly the same way.
@@ -46,6 +46,7 @@ const CONTROLS = [
   [['Shift+S'], 'down'],
   [['Shift'], 'nitro'],
   [['Click', 'F'], 'lasers'],
+  [['Q'], 'scan (explore)'],
   [['Num 4 6 8 2'], 'camera'],
 ];
 
@@ -79,7 +80,7 @@ export function Menu() {
         <p className="subtitle">
           {mode === 'race'
             ? '15 km canyon sprint · the speed cap keeps climbing · blast rivals, spires and UFOs'
-            : 'Endless open world · find UFOs, clear motherships, fly through boost rings'}
+            : 'Endless open world · four biomes · discover landmarks, hunt rare UFOs and motherships'}
         </p>
       </header>
       <div className="menu-foot">

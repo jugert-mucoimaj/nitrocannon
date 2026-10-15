@@ -1,7 +1,7 @@
 import { useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
-import { SKY } from '../engine/config.js';
+import { ATMOS } from '../engine/biomes.js';
 import { SUN_DIR } from '../engine/engine.js';
 
 const vertexShader = /* glsl */ `
@@ -32,13 +32,14 @@ const fragmentShader = /* glsl */ `
 `;
 
 // Gradient sky dome with a sun glow; it follows the camera so it never gets closer.
+// Its colours are the live ATMOS values, which the engine blends from the biome you're in.
 export function Sky() {
   const ref = useRef();
   const uniforms = useMemo(
     () => ({
-      top: { value: new THREE.Color(SKY.top) },
-      horizon: { value: new THREE.Color(SKY.horizon) },
-      below: { value: new THREE.Color(SKY.below) },
+      top: { value: ATMOS.top },
+      horizon: { value: ATMOS.horizon },
+      below: { value: ATMOS.below },
       sunDir: { value: SUN_DIR },
       sunColor: { value: new THREE.Color('#fff0d8') },
     }),

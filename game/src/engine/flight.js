@@ -67,9 +67,11 @@ export class Flight {
    * cruise:  top speed reachable with W (nitro and boost rings go beyond it)
    * move:    false = held in place (race countdown) but still animated
    * ceiling: (groundY) => highest allowed y
+   * ground:  (x, z, y) => surface height; lets Explore add floating isles you can land on
    */
-  update(dt, t, keys, { cruise, move = true, ceiling = () => Infinity }) {
+  update(dt, t, keys, { cruise, move = true, ceiling = () => Infinity, ground = groundHeight }) {
     const s = this.ship, st = s.def.stats;
+    this.ground = ground;
     const held = (...codes) => codes.some((c) => keys.has(c));
     s.prev.copy(s.pos);
 
@@ -129,15 +131,16 @@ export class Flight {
   /** Terrain: sample nose, tail and wingtips; on contact slide along it and get nudged nose-up. */
   collide(dt, ceiling) {
     const s = this.ship, v = s.fwd;
-    const { x, z } = s.pos;
+    const { x, y, z } = s.pos;
+    const ground = this.ground;
     const fx = Math.sin(this.yaw), fz = Math.cos(this.yaw);
     const hl = s.halfLength * 0.8, hw = s.halfWidth * 0.6;
     const g = Math.max(
-      groundHeight(x, z),
-      groundHeight(x + fx * hl, z + fz * hl),
-      groundHeight(x - fx * hl, z - fz * hl),
-      groundHeight(x - fz * hw, z + fx * hw),
-      groundHeight(x + fz * hw, z - fx * hw),
+      ground(x, z, y),
+      ground(x + fx * hl, z + fz * hl, y),
+      ground(x - fx * hl, z - fz * hl, y),
+      ground(x - fz * hw, z + fx * hw, y),
+      ground(x + fz * hw, z - fx * hw, y),
     );
     s.ground = g;
     const minY = g + s.halfHeight + 1.2;
@@ -147,7 +150,7 @@ export class Flight {
       this.lift = Math.max(this.lift, 0);
       s.speed *= Math.exp(-dt * 0.5);
       // Ride up the slope ahead instead of grinding into it (not when gently settling at a hover).
-      const slope = Math.atan2(groundHeight(x + fx * 12, z + fz * 12) - groundHeight(x, z), 12);
+      const slope = Math.atan2(ground(x + fx * 12, z + fz * 12, y) - ground(x, z, y), 12);
       const climb = Math.max(0.15, slope + 0.12);
       if (v > 15 && this.pitch < climb) {
         this.pitch += (climb - this.pitch) * (1 - Math.exp(-dt * 10));

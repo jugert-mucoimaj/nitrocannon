@@ -20,9 +20,6 @@ export const LASER_SLOWDOWN = 0.86; // speed multiplier for a racer hit by a las
 
 export const UFO_URL = ufoUrl;
 
-// Golden-hour palette shared by the sky dome and the fog, so the horizon blends seamlessly.
-export const SKY = { top: '#1d3577', horizon: '#ffb487', below: '#d48a66' };
-
 export const cssColor = (n) => '#' + n.toString(16).padStart(6, '0');
 
 // 3D model credits (all from Sketchfab). The game uses modified copies: rescaled, recentred,

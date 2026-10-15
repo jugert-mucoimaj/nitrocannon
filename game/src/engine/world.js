@@ -1,6 +1,10 @@
-// Infinite procedural canyon: a deterministic height function plus a chunk streamer around the player.
+// Infinite procedural world: a deterministic height function shaped by four biomes (see biomes.js),
+// plus a chunk streamer that builds terrain tiles and their decorations around the player.
 import * as THREE from 'three';
-import { ImprovedNoise } from 'three/addons/math/ImprovedNoise.js';
+import { noise, fbm, clamp, smoothstep, rng, hash2 } from './noise.js';
+import { biomeWeights, biomeColor, BIOME_ROCK, RED, FROST, VOLCANIC, CRYSTAL } from './biomes.js';
+
+export { noise, fbm, clamp, smoothstep, rng, hash2 };
 
 export const CHUNK = 256;      // metres per terrain tile
 const RES = 40;                // quads per tile edge (6.4 m spacing)
@@ -8,6 +12,8 @@ const STEP = CHUNK / RES;
 const SIDE = 3;                // race: tiles kept left/right of the player
 const AHEAD = 6;               // race: tiles kept ahead (+Z) of the player
 const RADIUS = 6;              // explore: tiles kept in every direction
+export const LAVA_Y = -9;      // lava fills the badlands' low ground up to this height
+const VOLCANIC_SINK = 175;      // how far the badlands' valleys sink below the other biomes (more = more lava)
 
 // Which tiles to keep around the player. Race only looks down the canyon; explore needs a full circle.
 const SHAPES = {
@@ -16,75 +22,62 @@ const SHAPES = {
 };
 const SCAN = Math.max(SIDE, AHEAD, RADIUS) + 1;
 
-const perlin = new ImprovedNoise();
-export const noise = (x, y, z = 0) => perlin.noise(x, y, z);
-export const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
-export const smoothstep = (a, b, x) => {
-  const t = clamp((x - a) / (b - a), 0, 1);
-  return t * t * (3 - 2 * t);
-};
-
-export function rng(seed) {
-  let a = seed >>> 0;
-  return () => {
-    a = (a + 0x6d2b79f5) | 0;
-    let t = Math.imul(a ^ (a >>> 15), 1 | a);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-export const hash2 = (i, j) => (Math.imul(i, 73856093) ^ Math.imul(j, 19349663)) >>> 0;
-
-function fbm(x, z, octaves, seed) {
-  let amp = 0.5, freq = 1, sum = 0, norm = 0;
-  for (let i = 0; i < octaves; i++) {
-    sum += amp * noise(x * freq, z * freq, seed + i * 17.31);
-    norm += amp;
-    amp *= 0.5;
-    freq *= 2.03;
-  }
-  return sum / norm;
-}
-
 /** X position of the canyon's centre line at distance z. The race runs along +Z. */
 export function courseX(z) {
   return 160 * Math.sin(z * 0.0012) + 80 * Math.sin(z * 0.0029 + 1.3) + 25 * Math.sin(z * 0.0071 + 2.1);
 }
 
-/** Terrain height at any world point. Used by the mesh, collisions and AI alike. */
-export function groundHeight(x, z) {
-  const d = Math.abs(x - courseX(z));
-  const wall = smoothstep(70, 320, d);                                    // 0 on the canyon floor, 1 on the walls
-  const dunes = fbm(x * 0.004, z * 0.004, 3, 1.7) * 34;                   // rolling floor
-  const ridge = smoothstep(0.12, 0.5, noise(z * 0.0021 + x * 0.0007, 3.1, 9.4)) * 58; // hills across the track
-  const m = fbm(x * 0.0021, z * 0.0021, 5, 4.2) * 0.5 + 0.55;
-  const mountains = Math.pow(Math.max(0, m), 1.8) * 360 + 25;
+/** Flat steps with steep risers: the crystal fields' terraced mesas. */
+const terrace = (h, step) => {
+  const k = h / step, f = Math.floor(k);
+  return (f + smoothstep(0.55, 1, k - f)) * step;
+};
+
+/**
+ * Everything about the ground at a point: height `h`, biome weights `w`, how much of it is lava,
+ * and `wall` (0 on the canyon floor, 1 out on the mountains). Used by the mesh, collisions and AI alike.
+ */
+export function sampleTerrain(x, z, out) {
+  const w = biomeWeights(x, z, out.w);
+  const wall = smoothstep(70, 320, Math.abs(x - courseX(z)));
+  const dunes = fbm(x * 0.004, z * 0.004, 3, 1.7) * 34;                              // rolling floor
+  const ridge = smoothstep(0.12, 0.5, noise(z * 0.0021 + x * 0.0007, 3.1, 9.4)) * 58; // hills across the canyon
+  const m = Math.max(0, fbm(x * 0.0021, z * 0.0021, 5, 4.2) * 0.5 + 0.55);
   const detail = noise(x * 0.035, z * 0.035, 2.2) * 1.5;
-  return dunes + ridge + mountains * wall + detail;
+  const mountains = Math.pow(m, 1.8) * 360 + 25;
+  let h = 0;
+  if (w[RED] > 1e-3) h += w[RED] * (dunes + ridge + mountains * wall + detail);
+  // Frost: softer snow drifts and rounder mountains.
+  if (w[FROST] > 1e-3) h += w[FROST] * (dunes * 0.45 + ridge * 0.8 + (Math.pow(m, 1.3) * 290 + 15) * wall + detail * 0.4);
+  // Volcanic: knife-edge ridged peaks and a sunken floor that fills with lava.
+  if (w[VOLCANIC] > 1e-3) {
+    // A sunken rolling base (its low ground floods) with narrow sharp ridges rising out of it.
+    const ridges = Math.pow(Math.max(0, 1 - Math.abs(fbm(x * 0.0026, z * 0.0026, 4, 8.8)) * 5), 3) * 260;
+    h += w[VOLCANIC] * (dunes - 16 + ridge * 0.6 + (mountains - VOLCANIC_SINK + ridges) * wall + detail * 2.2);
+  }
+  // Crystal: terraced mesas.
+  if (w[CRYSTAL] > 1e-3) h += w[CRYSTAL] * (terrace(dunes * 0.6 + ridge + mountains * wall, 24) + detail * 0.5);
+
+  const mask = smoothstep(0.3, 0.6, w[VOLCANIC]);
+  out.lava = 0;
+  if (mask > 0 && h < LAVA_Y) {
+    out.lava = mask;
+    h += (LAVA_Y - h) * mask;
+  }
+  out.h = h;
+  out.wall = wall;
+  return out;
 }
+
+export const newSample = () => ({ w: new Float32Array(4), h: 0, lava: 0, wall: 0 });
+const _sample = newSample();
+
+/** Terrain height at any world point. */
+export const groundHeight = (x, z) => sampleTerrain(x, z, _sample).h;
 
 /** Highest ground at a point and four neighbours `rad` metres away. */
 export function maxGround(x, z, rad) {
   return Math.max(groundHeight(x, z), groundHeight(x + rad, z), groundHeight(x - rad, z), groundHeight(x, z + rad), groundHeight(x, z - rad));
-}
-
-const PALETTE = {
-  sandA: new THREE.Color('#e6b075'),
-  sandB: new THREE.Color('#c98a52'),
-  rockA: new THREE.Color('#a85a3b'),
-  rockB: new THREE.Color('#6a3427'),
-  snow: new THREE.Color('#f6ede3'),
-};
-const tmpColor = new THREE.Color();
-
-function terrainColor(out, h, ny, x, z) {
-  const v = noise(x * 0.018, z * 0.018, 5.5) * 0.5 + 0.5;
-  out.copy(PALETTE.sandA).lerp(PALETTE.sandB, v);
-  const strata = Math.sin(h * 0.12 + v * 2) * 0.5 + 0.5;
-  tmpColor.copy(PALETTE.rockA).lerp(PALETTE.rockB, strata * 0.7 + v * 0.3);
-  out.lerp(tmpColor, smoothstep(0.93, 0.72, ny));
-  out.lerp(PALETTE.snow, smoothstep(230, 290, h) * smoothstep(0.55, 0.8, ny));
-  return out;
 }
 
 function makeRockGeometry() {
@@ -101,18 +94,37 @@ function makeRockGeometry() {
   return g;
 }
 
+/** Terrain material: flat-shaded vertex colours, plus a per-vertex `glow` attribute for lava and veins. */
+function makeTerrainMaterial() {
+  const mat = new THREE.MeshStandardMaterial({ vertexColors: true, flatShading: true, roughness: 0.95, metalness: 0 });
+  mat.onBeforeCompile = (shader) => {
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nattribute float glow;\nvarying float vGlow;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvGlow = glow;');
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', '#include <common>\nvarying float vGlow;')
+      .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance += diffuseColor.rgb * vGlow * 1.3;');
+  };
+  return mat;
+}
+
 export class Terrain {
   constructor(scene) {
     this.scene = scene;
     this.chunks = new Map();
     this.shape = 'race';
-    this.material =new THREE.MeshStandardMaterial({ vertexColors: true, flatShading: true, roughness: 0.95, metalness: 0 });
+    this.material = makeTerrainMaterial();
     this.rockGeo = makeRockGeometry();
     this.rockMat = new THREE.MeshStandardMaterial({ flatShading: true, roughness: 0.9 });
     this.crystalGeo = new THREE.OctahedronGeometry(1, 0);
-    this.crystalMat = new THREE.MeshStandardMaterial({
-      color: 0x9ff4ff, emissive: 0x1fb4e6, emissiveIntensity: 1.6, flatShading: true, roughness: 0.2, metalness: 0.1,
-    });
+    this.spikeGeo = new THREE.ConeGeometry(1, 1, 5).translate(0, 0.5, 0);
+    const gem = { flatShading: true, roughness: 0.2, metalness: 0.1 };
+    this.mats = {
+      cyan: new THREE.MeshStandardMaterial({ color: 0x9ff4ff, emissive: 0x1fb4e6, emissiveIntensity: 1.6, ...gem }),
+      magenta: new THREE.MeshStandardMaterial({ color: 0xf0a8ff, emissive: 0xb03ad6, emissiveIntensity: 1.5, ...gem }),
+      ice: new THREE.MeshStandardMaterial({ color: 0xd9f3ff, emissive: 0x2a7fb0, emissiveIntensity: 0.35, flatShading: true, roughness: 0.12, metalness: 0.05 }),
+      obsidian: new THREE.MeshStandardMaterial({ color: 0x16121a, flatShading: true, roughness: 0.22, metalness: 0.5 }),
+    };
   }
 
   /** Streams tiles around (px, pz). Builds at most `budget` new tiles per call; returns how many are still missing. */
@@ -156,41 +168,56 @@ export class Terrain {
   build(i, j) {
     const x0 = i * CHUNK, z0 = j * CHUNK;
     const N = RES + 1, W = N + 2;
-    // Heights with a one-vertex border so normals match across tile seams.
+    // Heights with a one-vertex border so normals match across tile seams; biome data for the inside.
     const H = new Float32Array(W * W);
+    const BW = new Float32Array(N * N * 4);
+    const LV = new Float32Array(N * N);
+    const s = newSample();
     for (let b = 0; b < W; b++) {
-      for (let a = 0; a < W; a++) H[b * W + a] = groundHeight(x0 + (a - 1) * STEP, z0 + (b - 1) * STEP);
+      for (let a = 0; a < W; a++) {
+        sampleTerrain(x0 + (a - 1) * STEP, z0 + (b - 1) * STEP, s);
+        H[b * W + a] = s.h;
+        if (a >= 1 && a <= N && b >= 1 && b <= N) {
+          const k = (b - 1) * N + (a - 1);
+          BW.set(s.w, k * 4);
+          LV[k] = s.lava;
+        }
+      }
     }
     const pos = new Float32Array(N * N * 3);
     const nor = new Float32Array(N * N * 3);
     const col = new Float32Array(N * N * 3);
+    const glow = new Float32Array(N * N);
     const c = new THREE.Color();
+    const w = new Float32Array(4);
     for (let b = 0; b < N; b++) {
       for (let a = 0; a < N; a++) {
-        const k = (b * N + a) * 3;
+        const k = b * N + a, k3 = k * 3;
         const h = H[(b + 1) * W + a + 1];
         const dx = H[(b + 1) * W + a + 2] - H[(b + 1) * W + a];
         const dz = H[(b + 2) * W + a + 1] - H[b * W + a + 1];
         const len = Math.hypot(dx, 2 * STEP, dz);
-        nor[k] = -dx / len; nor[k + 1] = (2 * STEP) / len; nor[k + 2] = -dz / len;
-        pos[k] = a * STEP; pos[k + 1] = h; pos[k + 2] = b * STEP;
-        terrainColor(c, h, nor[k + 1], x0 + a * STEP, z0 + b * STEP);
-        col[k] = c.r; col[k + 1] = c.g; col[k + 2] = c.b;
+        nor[k3] = -dx / len; nor[k3 + 1] = (2 * STEP) / len; nor[k3 + 2] = -dz / len;
+        pos[k3] = a * STEP; pos[k3 + 1] = h; pos[k3 + 2] = b * STEP;
+        w.set(BW.subarray(k * 4, k * 4 + 4));
+        glow[k] = biomeColor(c, w, h, nor[k3 + 1], x0 + a * STEP, z0 + b * STEP, LV[k]);
+        col[k3] = c.r; col[k3 + 1] = c.g; col[k3 + 2] = c.b;
       }
     }
     const idx = new Uint16Array(RES * RES * 6);
     let t = 0;
     for (let b = 0; b < RES; b++) {
       for (let a = 0; a < RES; a++) {
-        const p = b * N + a, q = p + 1, r = p + N, s = r + 1;
+        const p = b * N + a, q = p + 1, r = p + N, u = r + 1;
         idx[t++] = p; idx[t++] = r; idx[t++] = q;
-        idx[t++] = q; idx[t++] = r; idx[t++] = s;
+        idx[t++] = q; idx[t++] = r; idx[t++] = u;
       }
     }
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute('position', new THREE.BufferAttribute(pos, 3));
     geometry.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
     geometry.setAttribute('color', new THREE.BufferAttribute(col, 3));
+    geometry.setAttribute('glow', new THREE.BufferAttribute(glow, 1));
     geometry.setIndex(new THREE.BufferAttribute(idx, 1));
     geometry.computeBoundingSphere();
 
@@ -204,45 +231,78 @@ export class Terrain {
     return { i, j, group, geometry };
   }
 
+  /** Boulders everywhere, plus each biome's signature features up on the slopes. */
   addDecor(group, i, j, x0, z0) {
     const r = rng(hash2(i, j));
+    const s = newSample();
+    const pick = (w) => {
+      const u = r();
+      let acc = 0;
+      for (let b = 0; b < 4; b++) {
+        acc += w[b];
+        if (u <= acc) return b;
+      }
+      return RED;
+    };
     const m = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler();
-    const p = new THREE.Vector3(), s = new THREE.Vector3(), c = new THREE.Color();
+    const p = new THREE.Vector3(), sc = new THREE.Vector3(), c = new THREE.Color();
+    const place = (list, x, y, z, sx, sy, sz, rx, ry, rz) => list.push([x - x0, y, z - z0, sx, sy, sz, rx, ry, rz]);
 
-    // Boulders: small ones on the canyon floor (you fly over them), big ones up on the walls.
-    const rocks = new THREE.InstancedMesh(this.rockGeo, this.rockMat, 34);
+    const rocks = [], rockColors = [];
     for (let k = 0; k < 34; k++) {
       const x = x0 + r() * CHUNK, z = z0 + r() * CHUNK;
-      const wall = smoothstep(70, 320, Math.abs(x - courseX(z)));
-      const size = wall < 0.15 ? 0.8 + r() * 2 : 2 + r() * r() * 12;
-      p.set(x - x0, groundHeight(x, z) - size * 0.25, z - z0);
-      q.setFromEuler(e.set(r() * 6.28, r() * 6.28, r() * 6.28));
-      s.set(size, size * (0.6 + r() * 0.5), size);
-      rocks.setMatrixAt(k, m.compose(p, q, s));
-      rocks.setColorAt(k, c.copy(PALETTE.rockA).lerp(PALETTE.rockB, r()));
+      sampleTerrain(x, z, s);
+      const biome = pick(s.w);
+      const size = s.wall < 0.15 ? 0.8 + r() * 2 : 2 + r() * r() * 12;
+      const rx = r() * 6.28, ry = r() * 6.28, rz = r() * 6.28, squash = 0.6 + r() * 0.5, tone = r();
+      if (s.lava > 0.2) continue;
+      place(rocks, x, s.h - size * 0.25, z, size, size * squash, size, rx, ry, rz);
+      rockColors.push(c.copy(BIOME_ROCK[biome][0]).lerp(BIOME_ROCK[biome][1], tone).clone());
     }
-    rocks.receiveShadow = true;
-    group.add(rocks);
 
-    // Glowing crystal clusters on the slopes.
-    const spots = [];
-    for (let k = 0; k < 14 && spots.length < 6; k++) {
+    const feats = { cyan: [], magenta: [], ice: [], obsidian: [] };
+    for (let k = 0; k < 16; k++) {
       const x = x0 + r() * CHUNK, z = z0 + r() * CHUNK;
-      if (smoothstep(70, 320, Math.abs(x - courseX(z))) > 0.3) spots.push([x, z]);
-    }
-    if (!spots.length) return;
-    const crystals = new THREE.InstancedMesh(this.crystalGeo, this.crystalMat, spots.length * 3);
-    let n = 0;
-    for (const [x, z] of spots) {
-      const g = groundHeight(x, z);
-      for (let k = 0; k < 3; k++) {
-        const size = 3 + r() * 7;
-        p.set(x - x0 + (r() - 0.5) * 8, g + size * 0.8, z - z0 + (r() - 0.5) * 8);
-        q.setFromEuler(e.set((r() - 0.5) * 0.8, r() * 6.28, (r() - 0.5) * 0.8));
-        s.set(size * 0.35, size * 1.8, size * 0.35);
-        crystals.setMatrixAt(n++, m.compose(p, q, s));
+      sampleTerrain(x, z, s);
+      const biome = pick(s.w), roll = r();
+      if (s.wall < 0.25 || s.lava > 0.1) continue;
+      const tilt = () => (r() - 0.5) * 0.4;
+      if (biome === RED && roll < 0.45) {
+        for (let n = 0; n < 3; n++) {
+          const size = 3 + r() * 7;
+          place(feats.cyan, x + (r() - 0.5) * 8, s.h + size * 0.8, z + (r() - 0.5) * 8, size * 0.35, size * 1.8, size * 0.35, tilt(), r() * 6.28, tilt());
+        }
+      } else if (biome === FROST) {
+        const size = 8 + r() * 22;
+        place(feats.ice, x, s.h - 2, z, size * 0.22, size, size * 0.22, tilt() * 0.5, r() * 6.28, tilt() * 0.5);
+      } else if (biome === VOLCANIC) {
+        for (let n = 0; n < 2; n++) {
+          const size = 4 + r() * 12;
+          place(feats.obsidian, x + (r() - 0.5) * 10, s.h - 1, z + (r() - 0.5) * 10, size * 0.3, size, size * 0.3, tilt(), r() * 6.28, tilt());
+        }
+      } else if (biome === CRYSTAL && roll < 0.55) {
+        const list = r() < 0.5 ? feats.cyan : feats.magenta;
+        for (let n = 0, count = 1 + Math.floor(r() * 2); n < count; n++) {
+          const size = 10 + r() * 30;
+          place(list, x + (r() - 0.5) * 16, s.h + size * 0.5, z + (r() - 0.5) * 16, size * 0.3, size * 1.4, size * 0.3, tilt(), r() * 6.28, tilt());
+        }
       }
     }
-    group.add(crystals);
+
+    const instanced = (list, geo, mat, colors) => {
+      if (!list.length) return;
+      const im = new THREE.InstancedMesh(geo, mat, list.length);
+      list.forEach(([x, y, z, sx, sy, sz, rx, ry, rz], n) => {
+        im.setMatrixAt(n, m.compose(p.set(x, y, z), q.setFromEuler(e.set(rx, ry, rz)), sc.set(sx, sy, sz)));
+        if (colors) im.setColorAt(n, colors[n]);
+      });
+      im.receiveShadow = true;
+      group.add(im);
+    };
+    instanced(rocks, this.rockGeo, this.rockMat, rockColors);
+    instanced(feats.cyan, this.crystalGeo, this.mats.cyan);
+    instanced(feats.magenta, this.crystalGeo, this.mats.magenta);
+    instanced(feats.ice, this.spikeGeo, this.mats.ice);
+    instanced(feats.obsidian, this.spikeGeo, this.mats.obsidian);
   }
 }

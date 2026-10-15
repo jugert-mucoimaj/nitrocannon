@@ -111,6 +111,11 @@ export class Sfx {
     o.stop(t + 0.15);
   }
   hit() { this.ctx && this.sweep(0.18, 2500, 400, 0.25); }
+  alarm() {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    for (let i = 0; i < 4; i++) this.tone(i % 2 ? 520 : 760, t + i * 0.22, 0.2, 'sawtooth', 0.05);
+  }
   boost() { this.ctx && this.sweep(0.7, 400, 4000, 0.35); }
   crash() { this.ctx && this.sweep(0.6, 900, 80, 0.6, 'lowpass'); }
   bump() { this.ctx && this.sweep(0.18, 300, 120, 0.3, 'lowpass'); }

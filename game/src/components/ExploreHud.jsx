@@ -6,8 +6,12 @@ import { PauseOverlay } from './Overlays.jsx';
 const BLIP = {
   u: { color: '#5ff2ff', r: 3 },   // UFO
   r: { color: '#ff9d3d', r: 3.5 }, // boost ring
+  l: { color: '#ffffff', r: 4.5 }, // landmark not yet discovered
+  d: { color: '#8a93a6', r: 3.5 }, // discovered landmark
   m: { color: '#c58bff', r: 7 },   // mothership
   c: { color: '#7b6f99', r: 6 },   // cleared mothership
+  h: { color: '#ff3a3a', r: 7 },   // hostile mothership
+  e: { color: '#ff5a4a', r: 2.5 }, // attack drone
 };
 
 /** Top-down radar, ship at the centre pointing up. Blips are pre-rotated by the engine. */
@@ -31,11 +35,20 @@ function Radar({ blips }) {
     g.lineTo(mid + R, mid);
     g.stroke();
     for (const [u, v, kind, edge] of blips) {
-      const b = BLIP[kind];
+      const b = BLIP[kind], x = mid + u * R, y = mid - v * R, s = b.r * 2;
       g.globalAlpha = edge ? 0.55 : 1;
       g.fillStyle = b.color;
       g.beginPath();
-      g.arc(mid + u * R, mid - v * R, b.r * 2, 0, Math.PI * 2);
+      if (kind === 'l' || kind === 'd') {
+        // landmarks are diamonds
+        g.moveTo(x, y - s);
+        g.lineTo(x + s, y);
+        g.lineTo(x, y + s);
+        g.lineTo(x - s, y);
+        g.closePath();
+      } else {
+        g.arc(x, y, s, 0, Math.PI * 2);
+      }
       g.fill();
     }
     g.globalAlpha = 1;
@@ -79,8 +92,9 @@ export function ExploreHud() {
   const paused = useStore((s) => s.paused);
   const locked = useStore((s) => s.locked);
   if (!ex) return null;
+  const t = ex.threat;
   return (
-    <section className={`hud explore${ex.scraping ? ' scrape' : ''}`}>
+    <section className={`hud explore${ex.scraping ? ' scrape' : ''}${ex.hurt ? ' hurt' : ''}`}>
       <div className="hud-tl panel">
         <div className="label">UFOs found</div>
         <div className="ufo-count left">
@@ -89,26 +103,73 @@ export function ExploreHud() {
         </div>
         <div className="label">Motherships</div>
         <div className="mothers">
-          <b>{ex.mothers}</b> found · <b>{ex.cleared}</b> cleared
+          <b>{ex.mothers}</b> found · <b>{ex.cleared}</b> cleared · <b className="red">{ex.destroyed}</b> destroyed
+        </div>
+        <div className="label">Landmarks</div>
+        <div className="mothers">
+          <b>{ex.landmarks}</b> discovered
         </div>
         <div className="label">Flight time</div>
         <div className="mono">{ex.time}</div>
       </div>
 
       <Compass heading={ex.heading} />
+      <div className="biome-label">{ex.biome}</div>
+
+      {t && (
+        <div className={`threat panel${t.exposed ? ' exposed' : ''}`}>
+          {t.exposed ? (
+            <>
+              <b>Shield down · destroy the core</b>
+              <i className="core-bar">
+                <span style={{ width: `${t.core * 100}%` }} />
+              </i>
+            </>
+          ) : (
+            <>
+              <b>⚠ Hostile mothership</b>
+              <span>
+                Wave {t.wave}/{t.waves} · {t.drones} drone{t.drones === 1 ? '' : 's'} left
+              </span>
+            </>
+          )}
+        </div>
+      )}
 
       <div className="hud-tr panel radar-panel">
         <Radar blips={ex.radar} />
         <div className="radar-legend">
           <span><i style={{ background: BLIP.u.color }} />UFO</span>
           <span><i style={{ background: BLIP.r.color }} />Ring</span>
+          <span><i className="diamond" style={{ background: BLIP.l.color }} />Landmark</span>
           <span><i style={{ background: BLIP.m.color }} />Mothership</span>
+          <span><i style={{ background: BLIP.h.color }} />Hostile</span>
+        </div>
+        <div className={`scan-chip${ex.scanIn ? '' : ' ready'}`}>
+          Scanner <kbd>Q</kbd> {ex.scanIn ? `${ex.scanIn}s` : 'ready'}
         </div>
       </div>
+
+      {ex.waypoints.map((w, i) => (
+        <div key={i} id={`wp-${i}`} className={`waypoint ${w.kind}`}>
+          <span>{w.label}</span>
+          <b />
+        </div>
+      ))}
 
       <div className="crosshair" id="crosshair" />
 
       <div className="hud-bc">
+        <div className="vitals">
+          <label>Shield</label>
+          <i className="shield">
+            <span style={{ width: `${ex.shield * 100}%` }} />
+          </i>
+          <label>Hull</label>
+          <i className={`hull${ex.hull < 0.3 ? ' low' : ''}`}>
+            <span style={{ width: `${ex.hull * 100}%` }} />
+          </i>
+        </div>
         <div className="speed">
           {ex.speed}
           <small>km/h</small>
@@ -129,12 +190,18 @@ export function ExploreHud() {
         </div>
       </div>
 
-      {!locked && !paused && <div className="lock-hint">Click to steer with the mouse</div>}
+      {ex.disabled && (
+        <div className="disabled">
+          Ship disabled
+          <small>Respawning out of range…</small>
+        </div>
+      )}
+      {!locked && !paused && !ex.disabled && <div className="lock-hint">Click to steer with the mouse</div>}
       {paused && <PauseOverlay />}
       <div className="hint">
         <span>Mouse aim · A/D turn · W/S thrust / brake</span>
         <span>Space up · Shift+S down · Shift nitro</span>
-        <span>Click / F fire · Numpad 4/6/8/2 camera · 5 resets</span>
+        <span>Click / F fire · Q scan · Numpad 4/6/8/2 camera</span>
         <span>Wheel zoom · I invert Y ({ex.invert ? 'on' : 'off'}) · P pause · M mute</span>
       </div>
     </section>

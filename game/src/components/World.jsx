@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import { Environment, Lightformer } from '@react-three/drei';
 import { Engine } from '../engine/engine.js';
-import { SKY } from '../engine/config.js';
+import { ATMOS } from '../engine/biomes.js';
 import { Sky } from './Sky.jsx';
 
 // Declarative scene setup (sky, fog, lights, reflections) + the imperative race engine, ticked every frame.
@@ -11,10 +11,11 @@ export function World({ assets }) {
   const camera = useThree((s) => s.camera);
   const dom = useThree((s) => s.gl.domElement);
   const sun = useRef();
+  const hemi = useRef();
   const engine = useMemo(() => new Engine(assets), [assets]);
 
   useEffect(() => {
-    engine.attach({ scene, camera, sun: sun.current, dom });
+    engine.attach({ scene, camera, sun: sun.current, hemi: hemi.current, dom });
     return () => engine.detach();
   }, [engine, scene, camera, dom]);
 
@@ -23,8 +24,9 @@ export function World({ assets }) {
   return (
     <>
       <Sky />
-      <fog attach="fog" args={[SKY.horizon, 260, 1550]} />
-      <hemisphereLight args={['#c6d8ff', '#d08a5e', 1]} />
+      {/* Fog colour/distance and both lights are re-blended every frame from the current biome. */}
+      <fog attach="fog" args={[ATMOS.horizon.clone(), 260, 1550]} />
+      <hemisphereLight ref={hemi} args={['#c6d8ff', '#d08a5e', 1]} />
       <directionalLight
         ref={sun}
         color="#ffd8b4"
